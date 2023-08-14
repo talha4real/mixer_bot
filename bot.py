@@ -9,7 +9,9 @@ from googleapiclient.http import MediaFileUpload
 from docx import Document
 import random
 import re
-
+from moviepy.video.fx import all as vfx_all
+from PIL import Image
+from io import BytesIO
 
 captions = []
 hashtags = []
@@ -51,14 +53,6 @@ for line in lines[1:]:
         captions.append(line)
 
 
-
-
-
-
-
-
-# for line in lines:
-#     print(line)
 
 def get_folder_id(service, folder_name):
     results = service.files().list(q=f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder'",
@@ -108,15 +102,64 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Dictionary to store user submitted links
 user_links = {}
 
+def apply_random_effects(image):
+    # Apply your effects to the image here
+    modified_image = image.copy()
+
+    # Apply colorx effect
+    random_factor_colorx = random.uniform(0.5, 1.5)
+    modified_image = apply_colorx_effect(modified_image, random_factor_colorx)
+
+    return modified_image
+
+def apply_colorx_effect(image, factor):
+    # Convert the image to a NumPy array
+    np_image = np.array(image)
+
+    # Apply color adjustment
+    modified_np_image = np.minimum(255, (factor * np_image)).astype('uint8')
+
+    # Convert the NumPy array back to an image
+    modified_image = Image.fromarray(modified_np_image)
+
+    return modified_image
+
+
+def image_to_bytes(image):
+    # Convert the image to bytes
+    buffered = BytesIO()
+    image.save(buffered, format='PNG')
+    buffered.seek(0)
+    return buffered
+
+
 @bot.command()
 async def mix(ctx, platform: str):
-    if platform.lower() == 'tiktok':
+    if platform.lower() == 'tiktok' or platform.lower() == 'insta':
         embed = discord.Embed(
             title="Upload Videos for TikTok Mix",
             description="Please create a folder with your videos on this drive: [Google Drive](https://drive.google.com/drive/folders/1N4i1DnEQeR_vCDLrpW9ZlFWW7FFUPO4s/). Once Uploaded, use the command `!submit [Folder_name]` to start mixing.",
             color=discord.Color.blue()
         )
         await ctx.send(embed=embed)
+    elif platform.lower()=="pfp":
+        if ctx.message.attachments:
+            # Get the first attached image
+            attachment = ctx.message.attachments[0]
+
+            # Download the image
+            response = await attachment.read()
+            image = Image.open(BytesIO(response))
+
+            # Apply effects
+            modified_image = apply_random_effects(image)
+
+            # Convert the modified image to bytes
+            modified_image_bytes = image_to_bytes(modified_image)
+
+            # Send the modified image back
+            await ctx.send(file=discord.File(modified_image_bytes, filename='modified_image.png'))
+
     else:
         await ctx.send("Invalid platform. Use `!mix tiktok`.")
 
@@ -148,20 +191,39 @@ def mix_video(video,folder_id):
     output_path = f"./temp/{video['name']}"
     gdown.download(url, output_path, quiet=False)
     video_clip = VideoFileClip(output_path)
-    noisy_video_clip = video_clip.fl_image(add_noise)
+        
+    modified_clip = video_clip.fl_image(add_noise)
 
-    # Apply saturation effect
-    saturated_clip = video_clip.fx(colorx.colorx, 1.5)
+
+    random_factor = random.uniform(0.5, 1.5)
+    if random.random() < 1/3:
+        modified_clip = video_clip.fx(colorx.colorx, random_factor)
+
+    modified_clip = video_clip.fx(vfx_all.lum_contrast, random_factor)
+
+    modified_clip = vfx_all.colorx(video_clip, random_factor)
+
+
+    if random.random() < 0.2:
+        modified_clip = vfx_all.blackwhite(video_clip)
+
+    fadein_duration = random.uniform(1, 5)
+
+    fadein_clip = vfx_all.fadein(video_clip, fadein_duration)
+
+    modified_clip = fadein_clip.fx(vfx_all.colorx, random_factor)
 
     # Output video path
     output_path = f"./output/{video['name']}"
 
     # Write the modified clip to an output file
-    saturated_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
+    modified_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
  
     # Close the video clips
     video_clip.close()
-    saturated_clip.close()
+    modified_clip.close()
+
+
   
 
 g_drive_service=GoogleDriveService().build()
@@ -232,6 +294,19 @@ async def caption(ctx):
 
 
 @bot.command()
+async def insta(ctx, platform: str):
+    if platform.lower() == 'tiktok':
+        bio_point =  random.choice(instagram_bio_points).replace("\n", "") 
+
+        embed = discord.Embed(
+            title="Instagram Bio",
+            description=bio_point,
+            color=discord.Color.blue()
+        )
+        await ctx.send(embed=embed)
+    
+
+@bot.command()
 async def bio(ctx, platform: str):
     if platform.lower() == 'tiktok':
 
@@ -245,10 +320,10 @@ async def bio(ctx, platform: str):
         await ctx.send(embed=embed)
     elif platform.lower() == 'instagram':
 
-        bio_point =  random.choice(instagram_bio_points).replace("\n", "") 
+        bio_point =  random.choice(tiktok_bio_points).replace("\n", "") 
 
         embed = discord.Embed(
-            title="TikTok Bio",
+            title="Tiktok Bio",
             description=bio_point,
             color=discord.Color.blue()
         )
@@ -256,9 +331,50 @@ async def bio(ctx, platform: str):
     else:
         await ctx.send("Invalid platform. Use `!mix tiktok`.")
 
+
+@bot.command()
+async def commands(ctx):
+    # Create an embed for the help message
+    embed = discord.Embed(title="Bot Help", description="List of available commands:", color=discord.Color.blue())
+
+    # Add fields for each command with their descriptions
+    embed.add_field(name="!MIX tiktok",
+                    value="Run the Command To see the steps.",
+                    inline=False)
+    
+   # Add fields for each command with their descriptions
+    embed.add_field(name="!MIX insta",
+                    value="Run the Command To see the steps.",
+                    inline=False)
+    
+    embed.add_field(name="!MIX PFP",
+                    value="Person uploads image to the bot directly. Takes it -> changes meta data and returns the edited image.",
+                    inline=False)
+
+    embed.add_field(name="!Bio TikTok",
+                    value="Function: Returns a caption for the bio of an account for TikTok.",
+                    inline=False)
+
+    embed.add_field(name="!Bio Instagram",
+                    value="Function: Returns a caption for the bio of an account for Instagram.",
+                    inline=False)
+
+    embed.add_field(name="!Caption",
+                    value="Returns 3 captions from a pool. These captions will be used for the post.",
+                    inline=False)
+
+    embed.add_field(name="!Insta Bio",
+                    value="Returns a caption for the bio of an account for Instagram.",
+                    inline=False)
+
+    # Send the embed as a message
+    await ctx.send(embed=embed)
+
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
+
+
 
 
 bot.run('MTEzNzExMzY1NTY5NjE3OTI5MQ.GkwF6Q.ttXRHCcN7hoNcEMnA9N37ySRzKngYYWGaAbZF8')
