@@ -12,6 +12,7 @@ import re
 from moviepy.video.fx import all as vfx_all
 from PIL import Image
 from io import BytesIO
+import streamlink
 
 captions = []
 hashtags = []
@@ -138,7 +139,7 @@ async def mix(ctx, platform: str):
     if platform.lower() == 'tiktok' or platform.lower() == 'insta':
         embed = discord.Embed(
             title="Upload Videos for TikTok Mix",
-            description="Please create a folder with your videos on this drive: [Google Drive](https://drive.google.com/drive/folders/1N4i1DnEQeR_vCDLrpW9ZlFWW7FFUPO4s/). Once Uploaded, use the command `!submit [Folder_name]` to start mixing.",
+            description="Please upload vidoes on this link: [Streamable](https://streamable.com/). Once Uploaded, copy the video urls and use the command `!begin [video_link] [video_link]` to start mixing.",
             color=discord.Color.blue()
         )
         await ctx.send(embed=embed)
@@ -159,6 +160,9 @@ async def mix(ctx, platform: str):
 
             # Send the modified image back
             await ctx.send(file=discord.File(modified_image_bytes, filename='modified_image.png'))
+        else:
+            await ctx.send("Please send an image alongside the command")
+
 
     else:
         await ctx.send("Invalid platform. Use `!mix tiktok`.")
@@ -186,11 +190,8 @@ def get_files(folder_name):
 parent_folder_id = "1N4i1DnEQeR_vCDLrpW9ZlFWW7FFUPO4s"
 
 def mix_video(video,folder_id):
-    # URL to download the video from Google Drive
-    url = f"https://drive.google.com/uc?id={video['id']}"
-    output_path = f"./temp/{video['name']}"
-    gdown.download(url, output_path, quiet=False)
-    video_clip = VideoFileClip(output_path)
+
+    video_clip = VideoFileClip(video)
         
     modified_clip = video_clip.fl_image(add_noise)
 
@@ -214,7 +215,7 @@ def mix_video(video,folder_id):
     modified_clip = fadein_clip.fx(vfx_all.colorx, random_factor)
 
     # Output video path
-    output_path = f"./output/{video['name']}"
+    output_path = f"./output/{video}"
 
     # Write the modified clip to an output file
     modified_clip.write_videofile(output_path, codec="libx264", audio_codec="aac")
@@ -230,9 +231,7 @@ g_drive_service=GoogleDriveService().build()
 
 @bot.command()
 async def submit(ctx, folder_name: str):
-    user = ctx.author
     files = get_files(folder_name)
-    print(files)
     if( len(files["files"])>0):
         loading_message = await ctx.send("Mixing... ⏳")
         doc = Document()
@@ -271,6 +270,101 @@ async def submit(ctx, folder_name: str):
 
 
 @bot.command()
+async def backup(ctx, folder_name: str):
+    files = get_files(folder_name)
+    print(files)
+    if( len(files["files"])>0):
+        loading_message = await ctx.send("Mixing... ⏳")
+        doc = Document()
+        folder_id = create_folder(g_drive_service, f"result_{folder_name}",parent_folder_id)
+        for video in files["files"]:
+            if video["mimeType"] == "video/mp4":
+                mix_video(video,folder_id)
+                upload_file(g_drive_service,folder_id, f"./output/{video['name']}",video["name"])
+                random_caption = random.choice(captions)
+                # Remove the chosen caption from the array
+                captions.remove(random_caption)
+                doc.add_paragraph(f"Video Name: {video['name']}")
+                doc.add_paragraph(random_caption)
+                random_hashtags = random.sample(hashtags, 5)
+                hashtags_text = ' '.join(random_hashtags)
+
+                doc.add_paragraph(hashtags_text)
+
+
+
+        embed = discord.Embed(
+            title="Mix Completed",
+            description=f"You can find the edited videos in the drive below: \n [Drive](https://drive.google.com/drive/folders/{folder_id}).",
+            color=discord.Color.blue()
+        )
+
+
+        doc.save('./output/captions.docx')
+        upload_file(g_drive_service,folder_id,'./output/captions.docx',"captions.docx",doc_mime_type)
+        await loading_message.edit(content="Mix has been completed! ✅")
+
+        await ctx.send(embed=embed)
+        # await ctx.send(f"https://drive.google.com/drive/folders/{folder_id}")
+    else:
+        await ctx.send("No Videos Found")
+
+@bot.command()
+async def begin(ctx, *links):
+    if len(links)>0:
+        loading_message = await ctx.send("Mixing... ⏳")
+        doc = Document()
+        folder_id = create_folder(g_drive_service, f"result_mixer",parent_folder_id)
+        for link in links:
+            session = streamlink.Streamlink()
+            streams = session.streams(link)
+            if not streams:
+                print("No streams found for the provided URL.")
+            else:
+                # Choose the best stream (highest quality)
+                stream = streams["best"]
+                
+                # Get the video URL
+                video_url = stream.url
+                
+                # Download the video
+                response = session.http.get(video_url, stream=True)
+                video_identifier = link.split("/")[-1]
+                video_filename = f"{video_identifier}.mp4"
+                with open(video_filename, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                        
+                print("Video downloaded as", video_filename)
+                mix_video(video_filename,folder_id)
+                upload_file(g_drive_service,folder_id, f"./output/{video_filename}",video_filename)
+                random_caption = random.choice(captions)
+                # Remove the chosen caption from the array
+                captions.remove(random_caption)
+                doc.add_paragraph(f"Video Name: {video_filename}")
+                doc.add_paragraph(random_caption)
+                random_hashtags = random.sample(hashtags, 5)
+                hashtags_text = ' '.join(random_hashtags)
+
+                doc.add_paragraph(hashtags_text)
+            
+        embed = discord.Embed(
+            title="Mix Completed",
+            description=f"You can find the edited videos in the drive below: \n [Drive](https://drive.google.com/drive/folders/{folder_id}).",
+            color=discord.Color.blue()
+        )
+
+        doc.save('./output/captions.docx')
+        upload_file(g_drive_service,folder_id,'./output/captions.docx',"captions.docx",doc_mime_type)
+        await loading_message.edit(content="Mix has been completed! ✅")
+
+        await ctx.send(embed=embed)
+        # await ctx.send(f"https://drive.google.com/drive/folders/{folder_id}")
+    else:
+        await ctx.send("No Videos Found")
+  
+
+@bot.command()
 async def caption(ctx):
     random_caption_1 = random.choice(captions)
     captions.remove(random_caption_1)
@@ -293,17 +387,17 @@ async def caption(ctx):
     await ctx.send(embed=embed)     
 
 
-@bot.command()
-async def insta(ctx, platform: str):
-    if platform.lower() == 'tiktok':
-        bio_point =  random.choice(instagram_bio_points).replace("\n", "") 
+# @bot.command()
+# async def insta(ctx, platform: str):
+#     if platform.lower() == 'bio':
+#         bio_point =  random.choice(instagram_bio_points).replace("\n", "") 
 
-        embed = discord.Embed(
-            title="Instagram Bio",
-            description=bio_point,
-            color=discord.Color.blue()
-        )
-        await ctx.send(embed=embed)
+#         embed = discord.Embed(
+#             title="Instagram Bio",
+#             description=bio_point,
+#             color=discord.Color.blue()
+#         )
+#         await ctx.send(embed=embed)
     
 
 @bot.command()
@@ -320,14 +414,15 @@ async def bio(ctx, platform: str):
         await ctx.send(embed=embed)
     elif platform.lower() == 'instagram':
 
-        bio_point =  random.choice(tiktok_bio_points).replace("\n", "") 
+        bio_point =  random.choice(instagram_bio_points).replace("\n", "") 
 
         embed = discord.Embed(
-            title="Tiktok Bio",
+            title="Instagram Bio",
             description=bio_point,
             color=discord.Color.blue()
         )
         await ctx.send(embed=embed)
+
     else:
         await ctx.send("Invalid platform. Use `!mix tiktok`.")
 
@@ -338,34 +433,32 @@ async def commands(ctx):
     embed = discord.Embed(title="Bot Help", description="List of available commands:", color=discord.Color.blue())
 
     # Add fields for each command with their descriptions
-    embed.add_field(name="!MIX tiktok",
+    embed.add_field(name="!mix tiktok",
                     value="Run the Command To see the steps.",
                     inline=False)
     
    # Add fields for each command with their descriptions
-    embed.add_field(name="!MIX insta",
+    embed.add_field(name="!mix insta",
                     value="Run the Command To see the steps.",
                     inline=False)
     
-    embed.add_field(name="!MIX PFP",
+    embed.add_field(name="!mix pfp",
                     value="Person uploads image to the bot directly. Takes it -> changes meta data and returns the edited image.",
                     inline=False)
 
-    embed.add_field(name="!Bio TikTok",
+    embed.add_field(name="!bio tiktok",
                     value="Function: Returns a caption for the bio of an account for TikTok.",
                     inline=False)
 
-    embed.add_field(name="!Bio Instagram",
+    embed.add_field(name="!bio instagram",
                     value="Function: Returns a caption for the bio of an account for Instagram.",
                     inline=False)
 
-    embed.add_field(name="!Caption",
+    embed.add_field(name="!caption",
                     value="Returns 3 captions from a pool. These captions will be used for the post.",
                     inline=False)
 
-    embed.add_field(name="!Insta Bio",
-                    value="Returns a caption for the bio of an account for Instagram.",
-                    inline=False)
+ 
 
     # Send the embed as a message
     await ctx.send(embed=embed)
@@ -377,4 +470,4 @@ async def on_ready():
 
 
 
-bot.run('MTEzNzExMzY1NTY5NjE3OTI5MQ.GkwF6Q.ttXRHCcN7hoNcEMnA9N37ySRzKngYYWGaAbZF8')
+bot.run('MTE0NDQ2OTgzNDM0ODkwNDUzMQ.GolKpW.5TeN1c1lH3JE3Lw2syzBmFbjy1F8WKhACusU20')
